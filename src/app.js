@@ -294,13 +294,14 @@ bot.on('callback_query', async query => {
 			// ==========================================
 			// 3. YANGI: ADMINGA XABAR YUBORISH QISMI
 			// ==========================================
-			const adminMsg = `🚨 <b>YANGI BUYURTMA KELDI!</b>\n\n👤 <b>Mijoz:</b> ${user.order.name}\n📞 <b>Telefon:</b> ${user.order.phone}\n📍 <b>Manzil matni:</b> ${user.order.location}\n🍔 <b>Taom:</b> ${selectedFood.name}`
+			// 3. Adminga xabar va Lokatsiya
+			const adminMsg = `🚨 <b>YANGI BUYURTMA KELDI!</b>\n\n👤 <b>Mijoz:</b> ${user.order.name}\n📞 <b>Telefon:</b> ${user.order.phone}\n📍 <b>Manzil:</b> ${user.order.location}\n🍔 <b>Taom:</b> ${selectedFood.name}`
 			await bot.sendMessage(ADMIN_CHAT_ID, adminMsg, { parse_mode: 'HTML' })
 
 			// Lokatsiya matnidan sonlarni ajratib olib, xarita yuborish
-			if (user.order.location.includes('Kenglik:')) {
+			if (user.order.location && user.order.location.includes('Kenglik:')) {
 				try {
-					// Matnni tozalaymiz: "Kenglik: 41.387256, Uzunlik: 60.362101" -> 41.387256 va 60.362101
+					// user.order.location = "Kenglik: 41.387256, Uzunlik: 60.362101"
 					const parts = user.order.location.split(', ')
 					const lat = parts[0].replace('Kenglik: ', '').trim()
 					const lon = parts[1].replace('Uzunlik: ', '').trim()
