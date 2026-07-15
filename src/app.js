@@ -6,8 +6,14 @@ const ADMIN_CHAT_ID = 6480933576
 dotenv.config()
 
 const TOKEN = process.env.BOT_TOKEN
-
 const MONGO_URI = process.env.MONGODB_URI
+
+if (!TOKEN) {
+	throw new Error('BOT_TOKEN is required in the environment')
+}
+if (!MONGO_URI) {
+	throw new Error('MONGODB_URI is required in the environment')
+}
 
 const bot = new TelegramBot(TOKEN, { polling: true })
 
@@ -18,33 +24,53 @@ mongoose
 	.then(() => console.log('✅ MongoDB ga muvaffaqiyatli ulandi!'))
 	.catch(err => console.error('❌ MongoDB ga ulanishda xatolik:', err))
 
-// 1. Foydalanuvchi sessiyasi (vaqtinchalik jarayon) sxemasi
+// 1. Foydalanuvchi sxemasi (Savatcha - Cart tizimi qo'shildi)
+// 1. Foydalanuvchi sxemasi (To'liq ro'yxatga olish tizimi bilan)
 const userSchema = new mongoose.Schema({
 	chatId: { type: Number, required: true, unique: true },
+	firstName: { type: String, default: '' }, // <-- YANGI: Foydalanuvchi ismi
+	username: { type: String, default: '' }, // <-- YANGI: Telegram @username
+	registeredAt: { type: Date, default: Date.now }, // <-- YANGI: Qachon ro'yxatdan o'tgani
 	state: { type: String, default: 'IDLE' },
 	order: {
 		name: { type: String, default: '' },
 		phone: { type: String, default: '' },
 		location: { type: String, default: '' },
-		foodName: { type: String, default: '' },
-		foodPrice: { type: Number, default: 0 },
+		cart: { type: Array, default: [] },
 	},
 })
 const User = mongoose.model('User', userSchema)
 
-// 2. YANGI: Tugallangan buyurtmalar tarixi sxemasi (Arxiv uchun)
+const getUserSession = async (chatId, fromObj = {}) => {
+	let user = await User.findOne({ chatId })
+
+	// Agar foydalanuvchi bazada bo'lmasa, uni to'liq ma'lumotlari bilan ro'yxatga olamiz
+	if (!user) {
+		user = new User({
+			chatId: chatId,
+			firstName: fromObj.first_name || '',
+			username: fromObj.username || '',
+			state: STATES.IDLE,
+		})
+		await user.save()
+		console.log(`👤 Yangi foydalanuvchi ro'yxatdan o'tdi: ${user.firstName}`)
+	}
+	return user
+}
+
+// 2. Buyurtmalar tarixi (Arxiv)
 const orderSchema = new mongoose.Schema({
 	chatId: Number,
 	customerName: String,
 	phoneNumber: String,
 	location: String,
-	foodName: String,
-	foodPrice: Number,
-	orderedAt: { type: Date, default: Date.now }, // Buyurtma qilingan vaqt
+	cart: Array, // <-- BIR NECHTA TAOMLAR
+	totalPrice: Number, // <-- JAMI SUMMA
+	orderedAt: { type: Date, default: Date.now },
 })
 const Order = mongoose.model('Order', orderSchema)
 
-// Sessiya holatlari
+// Holatlar
 const STATES = {
 	IDLE: 'IDLE',
 	AWAITING_NAME: 'AWAITING_NAME',
@@ -53,14 +79,12 @@ const STATES = {
 	AWAITING_FOOD_SELECT: 'AWAITING_FOOD_SELECT',
 }
 
-// === BAZA VA SOZLAMALAR ===
 const DEFAULT_IMAGE =
 	'https://images.unsplash.com/photo-1550547660-d9450f859349?w=500'
-
 const dbFoods = Array.from({ length: 15 }, (_, i) => ({
 	id: `food_${i + 1}`,
 	name: `🍽 Taom #${i + 1}`,
-	description: `Eng sara masaliqlardan tayyorlangan maxsus taom. Mazasi og'zingizda qoladi!`,
+	description: `Eng sara masaliqlardan tayyorlangan maxsus taom.`,
 	price: 25000 + i * 2000,
 	image: DEFAULT_IMAGE,
 }))
@@ -76,257 +100,317 @@ const getMainMenu = () => ({
 	},
 })
 
-const getInlineMenu = (actionPrefix = 'view') => {
+// Menyu yasash funksiyasi (Savatchadagi miqdorlarni ham ko'rsatadi)
+const getInlineMenu = (actionPrefix = 'view', cart = []) => {
 	const keyboard = []
 	let row = []
+
 	dbFoods.forEach((food, index) => {
-		row.push({ text: food.name, callback_data: `${actionPrefix}_${food.id}` })
+		// Shu taomdan savatchada nechta borligini topamiz
+		const cartItem = cart.find(item => item.id === food.id)
+		const qtyText = cartItem ? ` (${cartItem.quantity} ta)` : ''
+		const btnText = `${food.name}${qtyText}` // Masalan: "🍽 Taom #1 (2 ta)"
+
+		row.push({ text: btnText, callback_data: `${actionPrefix}_${food.id}` })
 		if (row.length === 2 || index === dbFoods.length - 1) {
 			keyboard.push(row)
 			row = []
 		}
 	})
-	return { reply_markup: { inline_keyboard: keyboard } }
-}
 
-const getUserSession = async chatId => {
-	let user = await User.findOne({ chatId })
-	if (!user) {
-		user = new User({ chatId, state: STATES.IDLE })
-		await user.save()
+	// Agar buyurtma berish rejimida bo'lsak va savatchada kamida 1 ta taom bo'lsa, TASDIQLASH tugmasini chiqaramiz
+	if (actionPrefix === 'order' && cart.length > 0) {
+		const total = cart.reduce(
+			(sum, item) => sum + item.price * item.quantity,
+			0,
+		)
+		keyboard.push([
+			{
+				text: `✅ Tasdiqlash (Jami: ${total.toLocaleString()} so'm)`,
+				callback_data: 'confirm_order',
+			},
+		])
 	}
-	return user
+
+	return { reply_markup: { inline_keyboard: keyboard } }
 }
 
 // === XABARLARNI QABUL QILISH ===
 bot.on('message', async msg => {
 	const chatId = msg.chat.id
 	const text = msg.text
+	const firstName = msg.from.first_name || ''
 
 	try {
-		const user = await getUserSession(chatId)
+		const user = await getUserSession(chatId, msg.from)
 
 		if (text === '/start') {
 			user.state = STATES.IDLE
-			user.order = {
-				name: '',
-				phone: '',
-				location: '',
-				foodName: '',
-				foodPrice: 0,
-			}
+			user.order = { name: '', phone: '', location: '', cart: [] }
 			await user.save()
-
-			const welcomeMsg =
-				`<b>Assalomu alaykum, ${msg.from.first_name}!</b> 👨‍🍳\n\n` +
-				`Restoranimizning rasmiy botiga xush kelibsiz. Quyidagi menyudan kerakli bo'limni tanlang:`
-			return bot.sendMessage(chatId, welcomeMsg, {
-				parse_mode: 'HTML',
-				...getMainMenu(),
-			})
+			return bot.sendMessage(
+				chatId,
+				`<b>Assalomu alaykum! ${firstName}</b> 👨‍🍳\nQuyidagi menyudan tanlang:`,
+				{ parse_mode: 'HTML', ...getMainMenu() },
+			)
 		}
 
 		if (user.state === STATES.IDLE) {
-			if (text === '🍔 Menu') {
-				const msgText = `😋 <b>Bizning taomnomamiz:</b>\n<i>Ma'lumot olish uchun taomni tanlang.</i>`
-				return bot.sendMessage(chatId, msgText, {
+			if (text === '🍔 Menu' || text === '/menu') {
+				return bot.sendMessage(chatId, `😋 <b>Bizning taomnomamiz:</b>`, {
 					parse_mode: 'HTML',
 					...getInlineMenu('view'),
 				})
 			} else if (text === '🚖 Dostavka') {
 				user.state = STATES.AWAITING_NAME
-				user.order = {
-					name: '',
-					phone: '',
-					location: '',
-					foodName: '',
-					foodPrice: 0,
-				}
+				user.order = { name: '', phone: '', location: '', cart: [] }
 				await user.save()
-				return bot.sendMessage(
-					chatId,
-					`📝 <b>Buyurtma rasmiylashtirishni boshlaymiz.</b>\n\nIltimos, ismingizni kiriting:`,
-					{ parse_mode: 'HTML' },
-				)
+				return bot.sendMessage(chatId, `📝 <b>Ismingizni kiriting:</b>`, {
+					parse_mode: 'HTML',
+				})
 			} else if (text === 'ℹ️ Biz haqimizda') {
 				return bot.sendMessage(
 					chatId,
-					`🏢 <b>Bizning Restoran</b>\nManzil: Toshkent shahar...\nIsh vaqti: 09:00 - 23:00\nTelefon: +998901234567`,
+					`📌 <b>Biz haqimizda:</b>\n\nBizning restoranimiz eng sifatli taomlarni yetkazib berish bilan mashhur. Siz bizning menyudan tanlab, buyurtma berishingiz mumkin. Tez va ishonchli xizmat ko'rsatamiz!
+					Manzil: Khiva, Qosmo Poliklinika yaqinida\nTelefon: +998 99 116 16 51
+					`,
 					{ parse_mode: 'HTML' },
 				)
 			}
 		}
 
-		// 1. Ism
 		if (user.state === STATES.AWAITING_NAME && text) {
 			user.order.name = text
 			user.state = STATES.AWAITING_PHONE
 			await user.save()
-
-			const phoneKeyboard = {
-				reply_markup: {
-					keyboard: [[{ text: '📱 Raqamni yuborish', request_contact: true }]],
-					resize_keyboard: true,
-					one_time_keyboard: true,
-				},
-			}
 			return bot.sendMessage(
 				chatId,
-				`Rahmat, <b>${text}</b>!\n\nEndi pastdagi tugmani bosib, telefon raqamingizni yuboring yoki qo'lda yozing:`,
-				{ parse_mode: 'HTML', ...phoneKeyboard },
+				`Rahmat, <b>${text}</b>!\nEndi telefon raqamingizni yuboring:`,
+				{
+					parse_mode: 'HTML',
+					reply_markup: {
+						keyboard: [
+							[{ text: '📱 Raqamni yuborish', request_contact: true }],
+						],
+						resize_keyboard: true,
+						one_time_keyboard: true,
+					},
+				},
 			)
 		}
 
-		// 2. Raqam
 		if (user.state === STATES.AWAITING_PHONE) {
-			const phone = msg.contact ? msg.contact.phone_number : text
+			let phone = msg.contact
+				? msg.contact.phone_number
+				: text && /^\+?[0-9\s\-]{9,15}$/.test(text)
+					? text
+					: null
 			if (!phone)
 				return bot.sendMessage(
 					chatId,
-					`⚠️ Iltimos, raqamingizni to'g'ri kiriting.`,
+					`⚠️ <b>Noto'g'ri format!</b>\nRaqamni to'g'ri kiriting yoki tugmani bosing.`,
+					{ parse_mode: 'HTML' },
 				)
 
 			user.order.phone = phone
 			user.state = STATES.AWAITING_LOCATION
 			await user.save()
-
-			const locationKeyboard = {
-				reply_markup: {
-					keyboard: [
-						[
-							{
-								text: '📍 Manzilni (Lokatsiya) yuborish',
-								request_location: true,
-							},
-						],
-					],
-					resize_keyboard: true,
-					one_time_keyboard: true,
-				},
-			}
 			return bot.sendMessage(
 				chatId,
-				`Ajoyib! 📞 Raqam qabul qilindi.\n\nYetkazib berish manzilini aniq bilishimiz uchun pastdagi tugma orqali <b>Lokatsiya</b> yuboring:`,
-				{ parse_mode: 'HTML', ...locationKeyboard },
+				`Ajoyib! Endi <b>Lokatsiya</b> yuboring:`,
+				{
+					parse_mode: 'HTML',
+					reply_markup: {
+						keyboard: [
+							[
+								{
+									text: '📍 Manzilni (Lokatsiya) yuborish',
+									request_location: true,
+								},
+							],
+						],
+						resize_keyboard: true,
+						one_time_keyboard: true,
+					},
+				},
 			)
 		}
 
-		// 3. Lokatsiya
 		if (user.state === STATES.AWAITING_LOCATION) {
-			user.order.location = msg.location
-				? `Kenglik: ${msg.location.latitude}, Uzunlik: ${msg.location.longitude}`
-				: text
+			let lat = msg.location ? msg.location.latitude : null
+			let lon = msg.location ? msg.location.longitude : null
+
+			if (text && text.includes('http')) {
+				const match = text.match(/(-?\d{1,3}\.\d+)[,%2C\s]+(-?\d{1,3}\.\d+)/)
+				if (match) {
+					lat = match[1]
+					lon = match[2]
+				}
+			}
+
+			if (!lat || !lon)
+				return bot.sendMessage(
+					chatId,
+					`⚠️ <b>Manzil qabul qilinmadi!</b>\nTugmani bosing yoki to'g'ri xarita linkini yuboring.`,
+					{ parse_mode: 'HTML' },
+				)
+
+			user.order.location = `Kenglik: ${lat}, Uzunlik: ${lon}`
 			user.state = STATES.AWAITING_FOOD_SELECT
 			await user.save()
 
-			const foodMsg = `📍 Manzil qabul qilindi.\n\n🍔 <b>Qaysi taomni buyurtma qilmoqchisiz?</b>\nIltimos, tanlang:`
+			const foodMsg = `📍 Manzil qabul qilindi.\n\n🍔 <b>Qaysi taomni buyurtma qilmoqchisiz?</b>\n<i>Bitta taomni bir necha marta bosib miqdorini ko'paytirishingiz mumkin.</i>`
+			// Savatchani ham yuboramiz (hozircha bo'sh)
 			return bot.sendMessage(chatId, foodMsg, {
 				parse_mode: 'HTML',
-				...getInlineMenu('order'),
+				...getInlineMenu('order', user.order.cart),
 			})
 		}
 	} catch (error) {
-		console.error('Xatolik yuz berdi:', error)
-		bot.sendMessage(
-			chatId,
-			`⚠️ Kechirasiz, tizimda xatolik yuz berdi. Iltimos /start buyrug'ini bosing.`,
-		)
+		console.error(error)
 	}
 })
 
-// === INLINE TUGMALAR ===
+// === INLINE TUGMALAR (SAVATCHA VA TASDIQLASH) ===
 bot.on('callback_query', async query => {
-	const chatId = query.message.chat.id
+	const chatId = query.message?.chat?.id || query.from?.id
 	const data = query.data
 
-	try {
-		const user = await getUserSession(chatId)
+	if (!data || !chatId) {
+		return bot.answerCallbackQuery(query.id, {
+			text: "Noma'lum amal.",
+			show_alert: true,
+		})
+	}
 
+	try {
+		const fromObj = query.from || query.message.from || {}
+		const user = await getUserSession(chatId, fromObj)
 		const [action, ...idParts] = data.split('_')
 		const foodId = idParts.join('_')
 		const selectedFood = dbFoods.find(f => f.id === foodId)
 
+		// 1. Shunchaki menyudan ko'rish
 		if (action === 'view' && selectedFood) {
-			const caption =
-				`<b>${selectedFood.name}</b>\n\n` +
-				`📋 <b>Tarkibi:</b> ${selectedFood.description}\n` +
-				`💵 <b>Narxi:</b> ${selectedFood.price.toLocaleString()} so'm`
-
+			const caption = `<b>${selectedFood.name}</b>\n\n📋 <b>Tarkibi:</b> ${selectedFood.description}\n💵 <b>Narxi:</b> ${selectedFood.price.toLocaleString()} so'm`
 			await bot.sendPhoto(chatId, selectedFood.image, {
 				caption: caption,
 				parse_mode: 'HTML',
 			})
 		}
 
-		// TAOM TANLASH VA BAZAGA SAQLASH
-		// TAOM TANLASH VA BAZAGA SAQLASH
+		// 2. Taomni savatchaga qo'shish (Miqdorni oshirish)
 		else if (
 			action === 'order' &&
 			selectedFood &&
 			user.state === STATES.AWAITING_FOOD_SELECT
 		) {
-			// 1. Yangi buyurtmani bazaga (arxivga) saqlaymiz!
+			// Taom savatchada bormi tekshiramiz
+			const existingItemIndex = user.order.cart.findIndex(
+				item => item.id === selectedFood.id,
+			)
+
+			if (existingItemIndex > -1) {
+				// Bor bo'lsa, sonini 1 taga oshiramiz
+				user.order.cart[existingItemIndex].quantity += 1
+			} else {
+				// Yo'q bo'lsa, yangi qo'shamiz
+				user.order.cart.push({
+					id: selectedFood.id,
+					name: selectedFood.name,
+					price: selectedFood.price,
+					quantity: 1,
+				})
+			}
+
+			user.markModified('order.cart') // MongoDB ga array o'zgarganini aytish shart
+			await user.save()
+
+			// Xabardagi tugmalarni yangilab qo'yamiz (Miqdorlar ko'rinishi uchun)
+			await bot.editMessageReplyMarkup(
+				getInlineMenu('order', user.order.cart).reply_markup,
+				{ chat_id: chatId, message_id: query.message.message_id },
+			)
+		}
+
+		// 3. BUYURTMANI TASDIQLASH (Oxirgi qadam)
+		else if (
+			data === 'confirm_order' &&
+			user.state === STATES.AWAITING_FOOD_SELECT
+		) {
+			if (!user.order.cart || user.order.cart.length === 0) {
+				return bot.answerCallbackQuery(query.id, {
+					text: "Savatchangiz bo'sh!",
+					show_alert: true,
+				})
+			}
+
+			const totalSum = user.order.cart.reduce(
+				(sum, item) => sum + item.price * item.quantity,
+				0,
+			)
+
+			// Savatchadagi taomlarni chiroyli ro'yxatga aylantirish
+			let cartText = ''
+			user.order.cart.forEach((item, index) => {
+				cartText += `${index + 1}. ${item.name} x ${item.quantity} = ${(item.price * item.quantity).toLocaleString()} so'm\n`
+			})
+
+			// Arxivga saqlash
 			const newOrder = new Order({
 				chatId: chatId,
 				customerName: user.order.name,
 				phoneNumber: user.order.phone,
 				location: user.order.location,
-				foodName: selectedFood.name,
-				foodPrice: selectedFood.price,
+				cart: user.order.cart,
+				totalPrice: totalSum,
 			})
 			await newOrder.save()
 
-			// 2. Mijozga chek yuboramiz
+			// Xabardagi tugmalarni o'chirib yuboramiz (buyurtma berib bo'lingani uchun)
+			await bot.deleteMessage(chatId, query.message.message_id)
+
+			// Mijozga chek
 			const receipt =
 				`✅ <b>BUYURTMA MUVAFFAQIYATLI QABUL QILINDI!</b> 🎉\n\n` +
 				`👤 <b>Mijoz:</b> ${user.order.name}\n` +
-				`📞 <b>Raqam:</b> ${user.order.phone}\n` +
-				`📍 <b>Manzil:</b> <i>Qabul qilingan</i>\n` +
-				`🍔 <b>Taom:</b> ${selectedFood.name}\n` +
-				`💵 <b>Jami to'lov:</b> ${selectedFood.price.toLocaleString()} so'm\n\n` +
-				`🛵 <i>Tez orada operatorlarimiz siz bilan bog'lanadi. Xaridingiz uchun rahmat!</i>`
-
+				`📞 <b>Raqam:</b> ${user.order.phone}\n\n` +
+				`🛒 <b>Buyurtmalar:</b>\n${cartText}\n` +
+				`💵 <b>JAMI TO'LOV:</b> ${totalSum.toLocaleString()} so'm\n\n` +
+				`🛵 <i>Tez orada operatorlarimiz siz bilan bog'lanadi.</i>`
 			await bot.sendMessage(chatId, receipt, {
 				parse_mode: 'HTML',
 				...getMainMenu(),
 			})
 
-			// ==========================================
-			// 3. YANGI: ADMINGA XABAR YUBORISH QISMI
-			// ==========================================
-			// 3. Adminga xabar va Lokatsiya
-			const adminMsg = `🚨 <b>YANGI BUYURTMA KELDI!</b>\n\n👤 <b>Mijoz:</b> ${user.order.name}\n📞 <b>Telefon:</b> ${user.order.phone}\n📍 <b>Manzil:</b> ${user.order.location}\n🍔 <b>Taom:</b> ${selectedFood.name}`
+			// Adminga xabar va Lokatsiya
+			const adminMsg =
+				`🚨 <b>YANGI BUYURTMA KELDI!</b>\n\n` +
+				`👤 <b>Mijoz:</b> ${user.order.name}\n` +
+				`📞 <b>Telefon:</b> ${user.order.phone}\n` +
+				`📍 <b>Manzil:</b> ${user.order.location}\n\n` +
+				`🛒 <b>Taomlar ro'yxati:</b>\n${cartText}\n` +
+				`💵 <b>Jami to'lov:</b> ${totalSum.toLocaleString()} so'm`
 			await bot.sendMessage(ADMIN_CHAT_ID, adminMsg, { parse_mode: 'HTML' })
 
-			// Lokatsiya matnidan sonlarni ajratib olib, xarita yuborish
-			if (user.order.location && user.order.location.includes('Kenglik:')) {
+			if (user.order.location.includes('Kenglik')) {
 				try {
-					// user.order.location = "Kenglik: 41.387256, Uzunlik: 60.362101"
 					const parts = user.order.location.split(', ')
-					const lat = parts[0].replace('Kenglik: ', '').trim()
-					const lon = parts[1].replace('Uzunlik: ', '').trim()
-
-					// Adminga xaritani yuboramiz
+					const lat = parts[0].replace('Kenglik:', '').trim()
+					const lon = parts[1].replace('Uzunlik:', '').trim()
 					await bot.sendLocation(
 						ADMIN_CHAT_ID,
 						parseFloat(lat),
 						parseFloat(lon),
 					)
 				} catch (e) {
-					console.error('Xarita yuborishda xatolik:', e)
+					console.error(e)
 				}
 			}
-			// ==========================================
 
-			// 4. User sessiyasini (vaqtinchalik xotirani) tozalaymiz
+			// Sessiyani tozalash
 			user.state = STATES.IDLE
-			user.order = {
-				name: '',
-				phone: '',
-				location: '',
-				foodName: '',
-				foodPrice: 0,
-			}
+			user.order = { name: '', phone: '', location: '', cart: [] }
 			await user.save()
 		}
 
@@ -334,33 +418,26 @@ bot.on('callback_query', async query => {
 	} catch (error) {
 		console.error('Callback xatoligi:', error)
 		bot.answerCallbackQuery(query.id, {
-			text: "Xatolik yuz berdi. Qaytadan urinib ko'ring.",
+			text: 'Xatolik yuz berdi.',
 			show_alert: true,
 		})
 	}
+})
 
-	// ... oldingi kodlar ...
+// === KUTILMAGAN XATOLIKLARNI USHLASH VA BOTNI QUTQARISH ===
 
-	// Lokatsiyani linkka aylantiruvchi qism
-	const lat = msg.location ? msg.location.latitude : null
-	const lon = msg.location ? msg.location.longitude : null
-	const mapLink =
-		lat && lon
-			? `https://www.google.com/maps/search/?api=1&query=${lat},${lon}`
-			: user.order.location
+// 1. Polling xatoliklari (Telegram serveri bilan aloqa uzilsa)
+bot.on('polling_error', error => {
+	console.log('🔄 Polling xatoligi (Bot ishlashda davom etmoqda):', error.code)
+})
 
-	const adminMsg =
-		`🚨 <b>YANGI BUYURTMA KELDI!</b>\n\n` +
-		`👤 <b>Mijoz:</b> ${user.order.name}\n` +
-		`📞 <b>Telefon:</b> ${user.order.phone}\n` +
-		`📍 <b>Manzil:</b> ${mapLink}\n` + // Endi bu yerda link chiqadi
-		`🍔 <b>Taom:</b> ${selectedFood.name}\n` +
-		`💵 <b>To'lov:</b> ${selectedFood.price.toLocaleString()} so'm`
+// 2. Kutilmagan kod xatoliklari (Crash bo'lishning oldini oladi)
+process.on('uncaughtException', error => {
+	console.error('🔥 Kutilmagan xatolik (uncaughtException):', error)
+	// Dastur shu yerdan o'lib qolmasdan ishlashda davom etadi
+})
 
-	await bot.sendMessage(ADMIN_CHAT_ID, adminMsg, { parse_mode: 'HTML' })
-
-	// AGAR ADMINGA XARITANI O'ZINI YUBORMANGIZ KELSA (Qo'shimcha):
-	if (lat && lon) {
-		await bot.sendLocation(ADMIN_CHAT_ID, lat, lon)
-	}
+// 3. Ushlanmay qolgan Promise (async/await) xatoliklari
+process.on('unhandledRejection', (reason, promise) => {
+	console.error("⚠️ Ushlanmagan va'da xatoligi (unhandledRejection):", reason)
 })
