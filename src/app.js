@@ -1,6 +1,12 @@
 import dotenv from 'dotenv'
 import mongoose from 'mongoose'
 import TelegramBot from 'node-telegram-bot-api'
+import path from 'path'
+import sharp from 'sharp'
+import { fileURLToPath } from 'url'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
 const ADMIN_CHAT_ID = 6480933576
 
 dotenv.config()
@@ -79,15 +85,193 @@ const STATES = {
 	AWAITING_FOOD_SELECT: 'AWAITING_FOOD_SELECT',
 }
 
-const DEFAULT_IMAGE =
-	'https://images.unsplash.com/photo-1550547660-d9450f859349?w=500'
-const dbFoods = Array.from({ length: 15 }, (_, i) => ({
-	id: `food_${i + 1}`,
-	name: `🍽 Taom #${i + 1}`,
-	description: `Eng sara masaliqlardan tayyorlangan maxsus taom.`,
-	price: 25000 + i * 2000,
-	image: DEFAULT_IMAGE,
-}))
+const MENU_IMAGE_PATH = path.join(__dirname, 'images', 'menu.png')
+const getTelegramSafeMenu = async () => {
+	const resizedBuffer = await sharp(MENU_IMAGE_PATH)
+		.resize({
+			width: 1280,
+			height: 1280,
+			fit: 'inside',
+			withoutEnlargement: true,
+		})
+		.jpeg({ quality: 85 })
+		.toBuffer()
+
+	return { source: resizedBuffer, filename: 'menu.jpg' }
+}
+const MENU_PHOTO_URL =
+	'https://images.unsplash.com/photo-1555396273-367ea4eb4db5?w=800' // Yoki o'zingizdagi menyu rasm havolasi (linki)
+
+const dbFoods = [
+	{
+		id: 'food_1',
+		name: '🥪 Sendvich',
+		description: 'Mazali va to‘yimli sendvich.',
+		price: 40000,
+	},
+	{
+		id: 'food_2',
+		name: '🌭 Xod-dog 2x',
+		description: 'Ikki karza masalliqli xod-dog.',
+		price: 22000,
+	},
+	{
+		id: 'food_3',
+		name: '🌭 Xod-dog 3x',
+		description: 'Katta portsiya uchlik xod-dog.',
+		price: 25000,
+	},
+	{
+		id: 'food_4',
+		name: '🥙 Doner',
+		description: 'Ishtahaochar maxsus doner.',
+		price: 38000,
+	},
+	{
+		id: 'food_5',
+		name: '🌯 Gibrid',
+		description: 'Noyob va mazali gibrid.',
+		price: 40000,
+	},
+	{
+		id: 'food_6',
+		name: '🌭 Chef Dog',
+		description: 'Chef uslubidagi maxsus xot-dog.',
+		price: 42000,
+	},
+	{
+		id: 'food_7',
+		name: '🌯 Xanskiy',
+		description: 'Boyona va to‘yimli xanskiy.',
+		price: 28000,
+	},
+	{
+		id: 'food_8',
+		name: '🌭 Abichniy',
+		description: 'Klassik abichniy xod-dog.',
+		price: 13000,
+	},
+	{
+		id: 'food_9',
+		name: '🥙 Nan Kebab',
+		description: 'Non kebab sharqona usulda.',
+		price: 45000,
+	},
+	{
+		id: 'food_10',
+		name: '🌯 O‘rama Gam',
+		description: 'O‘rama gamburger.',
+		price: 45000,
+	},
+	{
+		id: 'food_11',
+		name: '🍔 Gamburger',
+		description: 'Klassik gamburger.',
+		price: 30000,
+	},
+	{
+		id: 'food_12',
+		name: '🍔 Chizburger',
+		description: 'Pishloqli mazali chizburger.',
+		price: 35000,
+	},
+	{
+		id: 'food_13',
+		name: '🍔 Meat Burger',
+		description: 'Ko‘p go‘shtli maxsus burger.',
+		price: 38000,
+	},
+	{
+		id: 'food_14',
+		name: '🌯 Xaggi',
+		description: 'Mazali xaggi fast-fud.',
+		price: 45000,
+	},
+	{
+		id: 'food_15',
+		name: '🍔 Chizburger 2x',
+		description: 'Ikki qavat pishloqli chizburger.',
+		price: 45000,
+	},
+	{
+		id: 'food_16',
+		name: '🌯 Xod Pekin Tovuq',
+		description: 'Pekincha tovuqli xod-dog.',
+		price: 25000,
+	},
+	{
+		id: 'food_17',
+		name: '🌯 Xod Pekin Go‘sht',
+		description: 'Pekincha go‘shtli xod-dog.',
+		price: 28000,
+	},
+	{
+		id: 'food_18',
+		name: '🍔 UZB Gamburger',
+		description: 'Milliy masalliqlar qo‘shilgan gamburger.',
+		price: 17000,
+	},
+	{
+		id: 'food_19',
+		name: '🌯 Shaurma',
+		description: 'Anʼanaviy mazali shaurma.',
+		price: 30000,
+	},
+	{
+		id: 'food_20',
+		name: '🌯 Lavash Classic',
+		description: 'Klassik tovuqli/go‘shtli lavash.',
+		price: 38000,
+	},
+	{
+		id: 'food_21',
+		name: '🌯 Lavash BBQ',
+		description: 'Barbekyu sousli lavash.',
+		price: 35000,
+	},
+	{
+		id: 'food_22',
+		name: '🍕 Patirli Gam',
+		description: 'Patirli gamburger (pitsa uslubida).',
+		price: 15000,
+	},
+	{
+		id: 'food_23',
+		name: '🌯 Shaverma 2x',
+		description: 'Katta portsiya shaverma.',
+		price: 35000,
+	},
+	{
+		id: 'food_24',
+		name: '🌯 Lavash 2x',
+		description: 'Katta ikkalalik lavash.',
+		price: 45000,
+	},
+	{
+		id: 'food_25',
+		name: '🌯 Lavash BBQ 2x',
+		description: 'Katta BBQ lavash ikki kishilik.',
+		price: 40000,
+	},
+	{
+		id: 'food_26',
+		name: '🌯 Pekin Tovuq 2x',
+		description: 'Pekin tovuqli katta portion.',
+		price: 35000,
+	},
+	{
+		id: 'food_27',
+		name: '🌯 Pekin Go‘sht 2x',
+		description: 'Pekin go‘shtli katta portion.',
+		price: 38000,
+	},
+	{
+		id: 'food_28',
+		name: '🍟 Fri',
+		description: 'Qarsildoq qovurilgan kartoshka fri.',
+		price: 15000,
+	},
+]
 
 // === YORDAMCHI FUNKSIYALAR ===
 const getMainMenu = () => ({
@@ -157,10 +341,24 @@ bot.on('message', async msg => {
 
 		if (user.state === STATES.IDLE) {
 			if (text === '🍔 Menu' || text === '/menu') {
-				return bot.sendMessage(chatId, `😋 <b>Bizning taomnomamiz:</b>`, {
+				// 1. Oldin menyu rasmini yuboramiz (Telegramga sig'adigan qilib caption bilan)
+				const menuPhoto = await getTelegramSafeMenu()
+				await bot.sendPhoto(chatId, menuPhoto.source, {
+					caption:
+						'📋 <b>Chef Food restorani menyusi</b>\nQuyidagi taomlardan birini tanlang:',
 					parse_mode: 'HTML',
-					...getInlineMenu('view'),
+					filename: menuPhoto.filename,
 				})
+
+				// 2. Keyin esa 28 ta taom tugmachalarini chiqaramiz
+				return bot.sendMessage(
+					chatId,
+					`😋 <b>Taomni tanlang va ustiga bosing:</b>`,
+					{
+						parse_mode: 'HTML',
+						...getInlineMenu('view'),
+					},
+				)
 			} else if (text === '🚖 Dostavka') {
 				user.state = STATES.AWAITING_NAME
 				user.order = { name: '', phone: '', location: '', cart: [] }
@@ -292,11 +490,10 @@ bot.on('callback_query', async query => {
 
 		// 1. Shunchaki menyudan ko'rish
 		if (action === 'view' && selectedFood) {
-			const caption = `<b>${selectedFood.name}</b>\n\n📋 <b>Tarkibi:</b> ${selectedFood.description}\n💵 <b>Narxi:</b> ${selectedFood.price.toLocaleString()} so'm`
-			await bot.sendPhoto(chatId, selectedFood.image, {
-				caption: caption,
-				parse_mode: 'HTML',
-			})
+			const foodInfo = `📋 <b>${selectedFood.name}</b>\n\n${selectedFood.description}\n\n💵 <b>Narxi:</b> ${selectedFood.price.toLocaleString()} so'm`
+			await bot.sendMessage(chatId, foodInfo, { parse_mode: 'HTML' })
+			await bot.answerCallbackQuery(query.id)
+			return
 		}
 
 		// 2. Taomni savatchaga qo'shish (Miqdorni oshirish)
