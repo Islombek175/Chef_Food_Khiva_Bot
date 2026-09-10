@@ -302,12 +302,15 @@ const getInlineMenu = (actionPrefix = 'view', cart = []) => {
 		}
 	})
 
-	// Agar buyurtma berish rejimida bo'lsak va savatchada kamida 1 ta taom bo'lsa, TASDIQLASH tugmasini chiqaramiz
+	// Agar buyurtma berish rejimida bo'lsak va savatchada kamida 1 ta taom bo'lsa, savat tugmalarini chiqaramiz
 	if (actionPrefix === 'order' && cart.length > 0) {
 		const total = cart.reduce(
 			(sum, item) => sum + item.price * item.quantity,
 			0,
 		)
+		keyboard.push([
+			{ text: '🗑 Savatni tozalash', callback_data: 'clear_cart' },
+		])
 		keyboard.push([
 			{
 				text: `✅ Tasdiqlash (Jami: ${total.toLocaleString()} so'm)`,
@@ -359,7 +362,7 @@ bot.on('message', async msg => {
 						...getInlineMenu('view'),
 					},
 				)
-			} else if (text === '🚖 Dostavka') {
+			} else if (text === '🚖 Dostavka'  || text === '/delivery') {
 				user.state = STATES.AWAITING_NAME
 				user.order = { name: '', phone: '', location: '', cart: [] }
 				await user.save()
@@ -415,7 +418,7 @@ bot.on('message', async msg => {
 			await user.save()
 			return bot.sendMessage(
 				chatId,
-				`Ajoyib! Endi <b>Lokatsiya</b> yuboring:`,
+				`Ajoyib! Endi iltimos GPS yoqing va <b>Lokatsiya</b> yuboring:`,
 				{
 					parse_mode: 'HTML',
 					reply_markup: {
@@ -530,7 +533,53 @@ bot.on('callback_query', async query => {
 			)
 		}
 
-		// 3. BUYURTMANI TASDIQLASH (Oxirgi qadam)
+		// 3. SAVATNI TOZALASH (Yangi inline tugma)
+		else if (data === 'clear_cart') {
+			// Bazadagi foydalanuvchining savatini tozalaymiz
+			user.order.cart = []
+			await user.save()
+
+			// Xabarni yangilab, savat bo'shaganini bildiramiz
+			return bot.editMessageText(
+				'🗑 Savatingiz tozalandi. Iltimos, menyudan qaytadan taom tanlang:',
+				{
+					chat_id: chatId,
+					message_id: query.message.message_id,
+					reply_markup: {
+						inline_keyboard: [
+							[{ text: '🍔 Menyu', callback_data: 'open_menu' }], // Menyu qaytadan ochish uchun
+						],
+					},
+				},
+			)
+		}
+
+		// === 5. OPEN_MENU TUGMASI UCHUN QO'SHIMCHA (YANGI) ===
+		else if (data === 'open_menu') {
+			// Avval eski xabarni o'chiramiz yoki yangilaymiz
+			await bot.deleteMessage(chatId, query.message.message_id).catch(() => {})
+
+			// 1. Menyu rasmini yuboramiz
+			const menuPhoto = await getTelegramSafeMenu()
+			await bot.sendPhoto(chatId, menuPhoto.source, {
+				caption:
+					'📋 <b>Chef Food restorani menyusi</b>\nQuyidagi taomlardan birini tanlang:',
+				parse_mode: 'HTML',
+				filename: menuPhoto.filename,
+			})
+
+			// 2. Taomlar tugmachalarini chiqaramiz (hali buyurtma rejimida emas, shunchaki view)
+			return bot.sendMessage(
+				chatId,
+				`😋 <b>Taomni tanlang va ustiga bosing:</b>`,
+				{
+					parse_mode: 'HTML',
+					...getInlineMenu('view', user.order.cart),
+				},
+			)
+		}
+
+		// 4. BUYURTMANI TASDIQLASH (Oxirgi qadam)
 		else if (
 			data === 'confirm_order' &&
 			user.state === STATES.AWAITING_FOOD_SELECT
