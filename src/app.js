@@ -334,8 +334,12 @@ function locationKeyboard() {
 	return {
 		reply_markup: {
 			keyboard: [
-				[{ text: '📍 Lokatsiyani yuborish', request_location: true }],
-				[{ text: '⬅️ Orqaga' }, { text: '✍️ Manzilni yozaman' }],
+				[{ text: '📍 Lokatsiyani yuborish (Telefon uchun)' }],
+				[
+					{ text: '🗺 Google / Yandex Maps linki' },
+					{ text: '✍️ Manzilni yozaman' },
+				],
+				[{ text: '⬅️ Orqaga' }],
 			],
 			resize_keyboard: true,
 			one_time_keyboard: true,
@@ -379,11 +383,12 @@ function foodsInlineKeyboard(catId, cart = []) {
 function cartInlineKeyboard(cart) {
 	const keyboard = []
 	cart.forEach(item => {
+		// Har bir taom uchun bitta ixcham qator: [-] [miqdori] [+] [❌]
 		keyboard.push([
-			{ text: '➖', callback_data: `dec_${item.id}` },
-			{ text: `${item.name} (${item.quantity})`, callback_data: `noop` },
-			{ text: '➕', callback_data: `inc_${item.id}` },
-			{ text: '❌', callback_data: `del_${item.id}` },
+			{ text: '➖ Kamaytirish', callback_data: `dec_${item.id}` },
+			{ text: `${item.quantity} ta`, callback_data: `noop` },
+			{ text: "➕ Qo'shish", callback_data: `inc_${item.id}` },
+			{ text: "❌ O'chirish", callback_data: `del_${item.id}` },
 		])
 	})
 	if (cart.length > 0) {
@@ -449,9 +454,6 @@ bot.on('message', async msg => {
 						chatId,
 						`📍 <b>3️⃣ Manzilni yuboring</b>\n\n` +
 							`Iltimos, avval telefoningizda <b>GPS / Joylashuv (Location)</b> ni yoqib qo'ying.\n` +
-							`Yoqish uchun:\n` +
-							`• iPhone: Sozlamalar > Maxfiylik > Joylashuv xizmatlari > Yoqish\n` +
-							`• Android: Yuqoridan pastga torting > 📍 Joylashuv tugmasini bosing\n\n` +
 							`Keyin pastdagi <b>📍 Lokatsiyani yuborish</b> tugmasini bosing.`,
 						{ parse_mode: 'HTML', ...locationKeyboard() },
 					)
@@ -546,6 +548,7 @@ bot.on('message', async msg => {
 		}
 
 		// STEP 3: LOCATION
+		// STEP 3: LOCATION
 		if (user.state === STATES.LOCATION) {
 			let lat = null,
 				lon = null,
@@ -554,30 +557,37 @@ bot.on('message', async msg => {
 			if (location) {
 				lat = location.latitude
 				lon = location.longitude
-			} else if (text === '✍️ Manzilni yozaman') {
+			} else if (
+				text === '✍️ Manzilni yozaman' ||
+				text === '🗺 Google / Yandex Maps linki'
+			) {
 				return bot.sendMessage(
 					chatId,
-					'✍️ Manzilingizni yozing (masalan: Xiva, 10-maktab yonida):',
+					'💻 <b>Kompyuter (Desktop) foydalanuvchilari uchun:</b>\n\n' +
+						'1. Google Maps yoki Yandex Maps ga kiring.\n' +
+						"2. O'z manzilingizni tanlab, uning <b>linkini (havolasini)</b> nusxalang va shu yerga yuboring.\n" +
+						"3. Yoki uyingiz manzilibni matn ko'rinishida yozib yuboring (masalan: <i>Xiva shahar, Pahlavon Mahmud ko'chasi, 12-uy</i>).",
+					{ parse_mode: 'HTML' },
 				)
 			} else if (text && text.length > 5 && !text.includes('BUYURTMA')) {
-				// User typed address manually
+				// User typed address manually or sent a map link
 				addrText = text
 			} else if (text && text.includes('http')) {
 				const m = text.match(/(-?\d+\.\d+)[,%2C\s]+(-?\d+\.\d+)/)
 				if (m) {
 					lat = m[1]
 					lon = m[2]
+				} else {
+					// Agar koordinata topilmasa ham, linkning o'zini manzil sifatida saqlab qolamiz
+					addrText = text
 				}
 			}
 
 			if (!lat && !lon && !addrText) {
 				return bot.sendMessage(
 					chatId,
-					'⚠️ Joylashuv kelmadi!\n\n' +
-						'Iltimos tekshiring:\n' +
-						'1. GPS / Joylashuv yoqilganmi? 📍\n' +
-						'2. Telegramga joylashuvga ruxsat berilganmi?\n\n' +
-						'Qayta urinib ko\'ring yoki "✍️ Manzilni yozaman" ni bosing.',
+					'⚠️ Manzil qabul qilinmadi!\n\n' +
+						"Iltimos, xarita havolasini (linkini) yoki manzilingizni matn ko'rinishida yuboring.",
 					locationKeyboard(),
 				)
 			}
@@ -590,7 +600,7 @@ bot.on('message', async msg => {
 
 			return bot.sendMessage(
 				chatId,
-				`📍 <b>Manzil qabul qilindi!</b>\n\n4️⃣ Endi <b>taom turini tanlang:</b>\nHar bir taom narxi yonida yozilgan.`,
+				`📍 <b>Manzil qabul qilindi!</b>\n\n4️⃣ Endi <b>taom turini tanlang:</b>`,
 				{ parse_mode: 'HTML', ...categoryInlineKeyboard() },
 			)
 		}
@@ -787,16 +797,18 @@ bot.on('callback_query', async query => {
 			})
 			await newOrder.save()
 
-			// Client receipt
+			// Client receipt (Yaxshilangan UX)
 			await bot.deleteMessage(chatId, query.message.message_id).catch(() => {})
 			await bot.sendMessage(
 				chatId,
-				`✅ <b>BUYURTMA QABUL QILINDI!</b> 🎉\n\n` +
-					`👤 ${user.order.name}\n` +
-					`📞 ${user.order.phone}\n\n` +
-					`🛒 <b>Buyurtma:</b>\n${cartText}\n` +
-					`💵 <b>JAMI: ${formatPrice(total)}</b>\n\n` +
-					`🛵 Operator tez orada bog'lanadi.\nRahmat!`,
+				`✅ <b>BUYURTMANINGIZ QABUL QILINDI!</b> 🎉\n\n` +
+					`👤 <b>Mijoz:</b> ${user.order.name}\n` +
+					`📞 <b>Telefon:</b> ${user.order.phone}\n\n` +
+					`🛒 <b>Buyurtma tarkibi:</b>\n${cartText}\n` +
+					`💵 <b>JAMI TO'LOV: ${formatPrice(total)}</b>\n\n` +
+					`⏱ <b>Taxminiy yetkazib berish vaqti:</b> 20-30 daqiqa\n` +
+					`💳 <b>To'lov turi:</b> Kuryer kelganda naqd pul yoki karta orqali\n\n` +
+					`ℹ️ <i>Ma'lumotlarni aniqlashtirish zarur bo'lsagina operatorimiz siz bilan bog'lanadi. Yoqimli ishtaha!</i>`,
 				{ parse_mode: 'HTML', ...mainKeyboard() },
 			)
 
